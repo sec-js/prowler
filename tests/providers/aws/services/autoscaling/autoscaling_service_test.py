@@ -4,7 +4,10 @@ from boto3 import client
 from moto import mock_aws
 
 from prowler.config.config import encoding_format_utf_8
-from prowler.providers.aws.services.autoscaling.autoscaling_service import AutoScaling
+from prowler.providers.aws.services.autoscaling.autoscaling_service import (
+    ApplicationAutoScaling,
+    AutoScaling,
+)
 from tests.providers.aws.utils import (
     AWS_ACCOUNT_NUMBER,
     AWS_REGION_US_EAST_1,
@@ -94,6 +97,26 @@ class Test_AutoScaling_Service:
             KeyName="the_keys",
             SecurityGroups=["default", "default2"],
         )
+
+        ec2_client = client("ec2", region_name=AWS_REGION_US_EAST_1)
+        vpc_id = ec2_client.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
+
+        elastic_load_balancer = client("elbv2", region_name=AWS_REGION_US_EAST_1)
+        target_group = elastic_load_balancer.create_target_group(
+            Name="my-target-group",
+            Protocol="HTTP",
+            Port=80,
+            VpcId=vpc_id,
+            HealthCheckProtocol="HTTP",
+            HealthCheckPort="80",
+            HealthCheckPath="/",
+            HealthCheckIntervalSeconds=30,
+            HealthCheckTimeoutSeconds=5,
+            HealthyThresholdCount=5,
+            UnhealthyThresholdCount=2,
+            Matcher={"HttpCode": "200"},
+        )
+
         _ = autoscaling_client.create_auto_scaling_group(
             AutoScalingGroupName="my-autoscaling-group",
             LaunchConfigurationName="test",
@@ -107,6 +130,9 @@ class Test_AutoScaling_Service:
                     "Value": "value_test",
                 },
             ],
+            HealthCheckType="ELB",
+            LoadBalancerNames=["my-load-balancer"],
+            TargetGroupARNs=[target_group["TargetGroups"][0]["TargetGroupArn"]],
         )
 
         # AutoScaling client for this test class
@@ -127,3 +153,47 @@ class Test_AutoScaling_Service:
                 "Value": "value_test",
             }
         ]
+        assert autoscaling.groups[0].health_check_type == "ELB"
+        assert autoscaling.groups[0].load_balancers == ["my-load-balancer"]
+        assert autoscaling.groups[0].target_groups == [
+            target_group["TargetGroups"][0]["TargetGroupArn"]
+        ]
+
+    # Test Application AutoScaling Describe Scalable Targets
+    @mock_aws
+    def test_application_auto_scaling_scalable_targets(self):
+        dynamodb_client = client("dynamodb", region_name=AWS_REGION_US_EAST_1)
+        table = dynamodb_client.create_table(
+            TableName="test1",
+            AttributeDefinitions=[
+                {"AttributeName": "client", "AttributeType": "S"},
+                {"AttributeName": "app", "AttributeType": "S"},
+            ],
+            KeySchema=[
+                {"AttributeName": "client", "KeyType": "HASH"},
+                {"AttributeName": "app", "KeyType": "RANGE"},
+            ],
+            BillingMode="PROVISIONED",
+            ProvisionedThroughput={"ReadCapacityUnits": 5, "WriteCapacityUnits": 5},
+        )["TableDescription"]
+
+        autoscaling_client = client(
+            "application-autoscaling", region_name=AWS_REGION_US_EAST_1
+        )
+        autoscaling_client.register_scalable_target(
+            ServiceNamespace="dynamodb",
+            ResourceId=f"table/{table['TableName']}",
+            ScalableDimension="dynamodb:table:ReadCapacityUnits",
+            MinCapacity=1,
+            MaxCapacity=10,
+        )
+
+        aws_provider = set_mocked_aws_provider([AWS_REGION_US_EAST_1])
+        autoscaling = ApplicationAutoScaling(aws_provider)
+        assert len(autoscaling.scalable_targets) == 1
+        assert autoscaling.scalable_targets[0].service_namespace == "dynamodb"
+        assert autoscaling.scalable_targets[0].resource_id == "table/test1"
+        assert (
+            autoscaling.scalable_targets[0].scalable_dimension
+            == "dynamodb:table:ReadCapacityUnits"
+        )

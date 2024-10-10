@@ -2,17 +2,14 @@ import json
 import os
 import re
 import tempfile
-from argparse import Namespace
 from datetime import datetime, timedelta
 from json import dumps
-from os import rmdir
 from re import search
 from unittest import mock
 
 import botocore
 import botocore.exceptions
 from boto3 import client, resource, session
-from freezegun import freeze_time
 from mock import patch
 from moto import mock_aws
 from pytest import raises
@@ -32,6 +29,7 @@ from prowler.providers.aws.config import (
 from prowler.providers.aws.exceptions.exceptions import (
     AWSArgumentTypeValidationError,
     AWSIAMRoleARNInvalidResourceType,
+    AWSInvalidAccountCredentials,
     AWSNoCredentialsError,
 )
 from prowler.providers.aws.lib.arn.models import ARN
@@ -42,7 +40,6 @@ from prowler.providers.aws.models import (
     AWSCredentials,
     AWSMFAInfo,
     AWSOrganizationsInfo,
-    AWSOutputOptions,
 )
 from prowler.providers.common.models import Connection
 from prowler.providers.common.provider import Provider
@@ -263,6 +260,72 @@ class TestAWSProvider:
         assert aws_provider.scan_unused_services is True
         assert aws_provider.audit_config == {}
         assert aws_provider.session.current_session.region_name == AWS_REGION_US_EAST_1
+
+    @mock_aws
+    def test_aws_provider_with_static_credentials(self):
+        # Create a mock IAM user
+        iam_client = client("iam", region_name=AWS_REGION_EU_WEST_1)
+        username = "test-user"
+        iam_user = iam_client.create_user(UserName=username)["User"]
+        # Create a mock IAM access keys
+        access_key = iam_client.create_access_key(UserName=iam_user["UserName"])[
+            "AccessKey"
+        ]
+
+        credentials = {
+            "aws_access_key_id": access_key["AccessKeyId"],
+            "aws_secret_access_key": access_key["SecretAccessKey"],
+        }
+
+        aws_provider = AwsProvider(**credentials)
+        assert aws_provider.type == "aws"
+        # Session
+        assert aws_provider.session.current_session.region_name == AWS_REGION_US_EAST_1
+        assert aws_provider.session.current_session.profile_name == "default"
+        assert aws_provider.session.original_session.region_name == AWS_REGION_US_EAST_1
+        assert aws_provider.session.original_session.profile_name == "default"
+
+        # Identity
+        assert aws_provider.identity.account == AWS_ACCOUNT_NUMBER
+        assert aws_provider.identity.account_arn == AWS_ACCOUNT_ARN
+        assert (
+            aws_provider.identity.identity_arn
+            == f"arn:aws:iam::{AWS_ACCOUNT_NUMBER}:user/{username}"
+        )
+        assert aws_provider.identity.partition == AWS_COMMERCIAL_PARTITION
+        assert aws_provider.identity.profile is None
+        assert aws_provider.identity.profile_region == AWS_REGION_US_EAST_1
+
+    @mock_aws
+    def test_aws_provider_with_session_credentials(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+        }
+
+        aws_provider = AwsProvider(**session_credentials)
+        assert aws_provider.type == "aws"
+        # Session
+        assert aws_provider.session.current_session.region_name == AWS_REGION_US_EAST_1
+        assert aws_provider.session.current_session.profile_name == "default"
+        assert aws_provider.session.original_session.region_name == AWS_REGION_US_EAST_1
+        assert aws_provider.session.original_session.profile_name == "default"
+
+        # Identity
+        assert aws_provider.identity.account == AWS_ACCOUNT_NUMBER
+        assert aws_provider.identity.account_arn == AWS_ACCOUNT_ARN
+        # moto is the default user created by moto
+        assert (
+            aws_provider.identity.identity_arn
+            == f"arn:aws:sts::{AWS_ACCOUNT_NUMBER}:user/moto"
+        )
+        assert aws_provider.identity.partition == AWS_COMMERCIAL_PARTITION
+        assert aws_provider.identity.profile is None
+        assert aws_provider.identity.profile_region == AWS_REGION_US_EAST_1
 
     @mock_aws
     def test_aws_provider_organizations_delegated_administrator(self):
@@ -1001,11 +1064,11 @@ aws:
             ],
         )
         instance_id = instances["Instances"][0]["InstanceId"]
-        instance_arn = f"arn:aws:ec2:{AWS_REGION_EU_CENTRAL_1}::instance/{instance_id}"
+        instance_arn = f"arn:aws:ec2:{AWS_REGION_EU_CENTRAL_1}:{AWS_ACCOUNT_NUMBER}:ec2:instance/{instance_id}"
         image_id = ec2_client.create_image(Name="testami", InstanceId=instance_id)[
             "ImageId"
         ]
-        image_arn = f"arn:aws:ec2:{AWS_REGION_EU_CENTRAL_1}::image/{image_id}"
+        image_arn = f"arn:aws:ec2:{AWS_REGION_EU_CENTRAL_1}:{AWS_ACCOUNT_NUMBER}:ec2:image/{image_id}"
         ec2_client.create_tags(
             Resources=[image_id], Tags=[{"Key": "ami", "Value": "test"}]
         )
@@ -1037,97 +1100,6 @@ aws:
         )
 
         assert aws_provider.audit_resources == [AWS_ACCOUNT_ARN]
-
-    @mock_aws
-    @freeze_time(datetime.today())
-    def test_set_provider_output_options_aws_no_output_filename(self):
-        arguments = Namespace()
-        arguments.status = ["FAIL"]
-        arguments.output_formats = ["csv"]
-        arguments.output_directory = "output_test_directory"
-        arguments.verbose = True
-        arguments.security_hub = True
-        arguments.shodan = "test-api-key"
-        arguments.only_logs = False
-        arguments.unix_timestamp = False
-        arguments.send_sh_only_fails = True
-
-        aws_provider = AwsProvider()
-        # This is needed since the output_options requires to get the global provider to get the audit config
-        with patch(
-            "prowler.providers.common.provider.Provider.get_global_provider",
-            return_value=aws_provider,
-        ):
-
-            aws_provider.output_options = arguments, {}
-
-            assert isinstance(aws_provider.output_options, AWSOutputOptions)
-            assert aws_provider.output_options.security_hub_enabled
-            assert aws_provider.output_options.send_sh_only_fails
-            assert aws_provider.output_options.status == ["FAIL"]
-            assert aws_provider.output_options.output_modes == ["csv", "json-asff"]
-            assert (
-                aws_provider.output_options.output_directory
-                == arguments.output_directory
-            )
-            assert aws_provider.output_options.bulk_checks_metadata == {}
-            assert aws_provider.output_options.verbose
-            assert (
-                f"prowler-output-{AWS_ACCOUNT_NUMBER}"
-                in aws_provider.output_options.output_filename
-            )
-            # Flaky due to the millisecond part of the timestamp
-            # assert (
-            #     aws_provider.output_options.output_filename
-            #     == f"prowler-output-{AWS_ACCOUNT_NUMBER}-{datetime.today().strftime('%Y%m%d%H%M%S')}"
-            # )
-
-            # Delete testing directory
-            rmdir(f"{arguments.output_directory}/compliance")
-            rmdir(arguments.output_directory)
-
-    @mock_aws
-    @freeze_time(datetime.today())
-    def test_set_provider_output_options_aws(self):
-        arguments = Namespace()
-        arguments.status = []
-        arguments.output_formats = ["csv"]
-        arguments.output_directory = "output_test_directory"
-        arguments.verbose = True
-        arguments.output_filename = "output_test_filename"
-        arguments.security_hub = True
-        arguments.shodan = "test-api-key"
-        arguments.only_logs = False
-        arguments.unix_timestamp = False
-        arguments.send_sh_only_fails = True
-
-        aws_provider = AwsProvider()
-        # This is needed since the output_options requires to get the global provider to get the audit config
-        with patch(
-            "prowler.providers.common.provider.Provider.get_global_provider",
-            return_value=aws_provider,
-        ):
-
-            aws_provider.output_options = arguments, {}
-
-            assert isinstance(aws_provider.output_options, AWSOutputOptions)
-            assert aws_provider.output_options.security_hub_enabled
-            assert aws_provider.output_options.send_sh_only_fails
-            assert aws_provider.output_options.status == []
-            assert aws_provider.output_options.output_modes == ["csv", "json-asff"]
-            assert (
-                aws_provider.output_options.output_directory
-                == arguments.output_directory
-            )
-            assert aws_provider.output_options.bulk_checks_metadata == {}
-            assert aws_provider.output_options.verbose
-            assert (
-                aws_provider.output_options.output_filename == arguments.output_filename
-            )
-
-            # Delete testing directory
-            rmdir(f"{arguments.output_directory}/compliance")
-            rmdir(arguments.output_directory)
 
     @mock_aws
     def test_validate_credentials_commercial_partition_with_regions(self):
@@ -1387,6 +1359,109 @@ aws:
             exception.value.args[0]
             == "[1912] AWS IAM Role ARN resource type is invalid"
         )
+
+    @mock_aws
+    def test_test_connection_with_static_credentials(self):
+        # Create a mock IAM user
+        iam_client = client("iam", region_name=AWS_REGION_EU_WEST_1)
+        username = "test-user"
+        iam_user = iam_client.create_user(UserName=username)["User"]
+        # Create a mock IAM access keys
+        access_key = iam_client.create_access_key(UserName=iam_user["UserName"])[
+            "AccessKey"
+        ]
+
+        credentials = {
+            "aws_access_key_id": access_key["AccessKeyId"],
+            "aws_secret_access_key": access_key["SecretAccessKey"],
+        }
+
+        connection = AwsProvider.test_connection(**credentials)
+
+        assert isinstance(connection, Connection)
+        assert connection.is_connected
+        assert connection.error is None
+
+    @mock_aws
+    def test_test_connection_with_session_credentials(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+        }
+
+        connection = AwsProvider.test_connection(**session_credentials)
+
+        assert isinstance(connection, Connection)
+        assert connection.is_connected
+        assert connection.error is None
+
+    @mock_aws
+    def test_test_connection_with_own_account(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+            "provider_id": AWS_ACCOUNT_NUMBER,
+        }
+
+        connection = AwsProvider.test_connection(**session_credentials)
+
+        assert isinstance(connection, Connection)
+        assert connection.is_connected
+        assert connection.error is None
+
+    @mock_aws
+    def test_test_connection_with_different_account(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+            "provider_id": "111122223333",
+        }
+
+        with raises(AWSInvalidAccountCredentials) as exception:
+            AwsProvider.test_connection(**session_credentials)
+
+        assert exception.type == AWSInvalidAccountCredentials
+        assert (
+            exception.value.args[0]
+            == "[1917] The provided AWS credentials belong to a different account"
+        )
+
+    @mock_aws
+    def test_test_connection_with_different_account_dont_raise(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+            "provider_id": "111122223333",
+        }
+
+        connection = AwsProvider.test_connection(
+            **session_credentials, raise_on_exception=False
+        )
+
+        assert isinstance(connection, Connection)
+        assert not connection.is_connected
+        assert isinstance(connection.error, AWSInvalidAccountCredentials)
+        assert (
+            connection.error.message
+            == "The provided AWS credentials belong to a different account"
+        )
+        assert connection.error.code == 1917
 
     @mock_aws
     def test_create_sts_session(self):

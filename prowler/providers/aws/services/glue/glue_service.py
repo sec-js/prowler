@@ -8,23 +8,28 @@ from prowler.lib.scan_filters.scan_filters import is_resource_filtered
 from prowler.providers.aws.lib.service.service import AWSService
 
 
-################## Glue
 class Glue(AWSService):
     def __init__(self, provider):
         # Call AWSService's __init__
         super().__init__(__class__.__name__, provider)
         self.connections = []
         self.__threading_call__(self._get_connections)
+        self.__threading_call__(self._list_tags, self.connections)
         self.tables = []
         self.__threading_call__(self._search_tables)
         self.catalog_encryption_settings = []
         self.__threading_call__(self._get_data_catalog_encryption_settings)
         self.dev_endpoints = []
         self.__threading_call__(self._get_dev_endpoints)
+        self.__threading_call__(self._list_tags, self.dev_endpoints)
         self.security_configs = []
         self.__threading_call__(self._get_security_configurations)
         self.jobs = []
         self.__threading_call__(self._get_jobs)
+        self.__threading_call__(self._list_tags, self.jobs)
+        self.ml_transforms = {}
+        self.__threading_call__(self._get_ml_transforms)
+        self.__threading_call__(self._list_tags, self.ml_transforms.values())
 
     def _get_data_catalog_arn_template(self, region):
         return f"arn:{self.audited_partition}:glue:{region}:{self.audited_account}:data-catalog"
@@ -205,6 +210,42 @@ class Glue(AWSService):
                 f"{regional_client.region} -- {error.__class__.__name__}[{error.__traceback__.tb_lineno}]: {error}"
             )
 
+    def _list_tags(self, resource: any):
+        try:
+            resource.tags = [
+                self.regional_clients[resource.region].get_tags(
+                    ResourceArn=resource.arn
+                )["Tags"]
+            ]
+        except Exception as error:
+            logger.error(
+                f"{resource.region} -- {error.__class__.__name__}[{error.__traceback__.tb_lineno}]: {error}"
+            )
+
+    def _get_ml_transforms(self, regional_client):
+        logger.info("Glue - Getting ML Transforms...")
+        try:
+            transforms = regional_client.get_ml_transforms()["Transforms"]
+            for transform in transforms:
+                ml_transform_arn = f"arn:{self.audited_partition}:glue:{regional_client.region}:{self.audited_account}:mlTransform/{transform['TransformId']}"
+                if not self.audit_resources or is_resource_filtered(
+                    ml_transform_arn, self.audit_resources
+                ):
+                    self.ml_transforms[ml_transform_arn] = MLTransform(
+                        arn=ml_transform_arn,
+                        id=transform["TransformId"],
+                        name=transform["Name"],
+                        user_data_encryption=transform.get("TransformEncryption", {})
+                        .get("MlUserDataEncryption", {})
+                        .get("MlUserDataEncryptionMode", "DISABLED"),
+                        region=regional_client.region,
+                    )
+
+        except Exception as error:
+            logger.error(
+                f"{regional_client.region} -- {error.__class__.__name__}[{error.__traceback__.tb_lineno}]: {error}"
+            )
+
 
 class Connection(BaseModel):
     name: str
@@ -212,6 +253,7 @@ class Connection(BaseModel):
     type: str
     properties: dict
     region: str
+    tags: Optional[list]
 
 
 class Table(BaseModel):
@@ -236,6 +278,7 @@ class DevEndpoint(BaseModel):
     arn: str
     security: Optional[str]
     region: str
+    tags: Optional[list]
 
 
 class Job(BaseModel):
@@ -244,6 +287,7 @@ class Job(BaseModel):
     security: Optional[str]
     arguments: Optional[dict]
     region: str
+    tags: Optional[list]
 
 
 class SecurityConfig(BaseModel):
@@ -255,3 +299,12 @@ class SecurityConfig(BaseModel):
     jb_encryption: str
     jb_key_arn: Optional[str]
     region: str
+
+
+class MLTransform(BaseModel):
+    arn: str
+    id: str
+    name: str
+    user_data_encryption: str
+    region: str
+    tags: Optional[list]
