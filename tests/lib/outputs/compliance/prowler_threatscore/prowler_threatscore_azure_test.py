@@ -1,5 +1,6 @@
 from datetime import datetime
 from io import StringIO
+from unittest import mock
 
 from freezegun import freeze_time
 from mock import patch
@@ -10,10 +11,7 @@ from prowler.lib.outputs.compliance.prowler_threatscore.models import (
 from prowler.lib.outputs.compliance.prowler_threatscore.prowler_threatscore_azure import (
     ProwlerThreatScoreAzure,
 )
-from tests.lib.outputs.compliance.fixtures import (
-    PROWLER_THREATSCORE_AZURE,
-    PROWLER_THREATSCORE_AZURE_NAME,
-)
+from tests.lib.outputs.compliance.fixtures import PROWLER_THREATSCORE_AZURE
 from tests.lib.outputs.fixtures.fixtures import generate_finding_output
 from tests.providers.azure.azure_fixtures import (
     AZURE_SUBSCRIPTION_ID,
@@ -33,9 +31,7 @@ class TestProwlerThreatScoreAzure:
             )
         ]
 
-        output = ProwlerThreatScoreAzure(
-            findings, PROWLER_THREATSCORE_AZURE, PROWLER_THREATSCORE_AZURE_NAME
-        )
+        output = ProwlerThreatScoreAzure(findings, PROWLER_THREATSCORE_AZURE)
         output_data = output.data[0]
         assert isinstance(output_data, ProwlerThreatScoreAzureModel)
         assert output_data.Provider == "azure"
@@ -138,15 +134,17 @@ class TestProwlerThreatScoreAzure:
         assert output_data_manual.ResourceName == "Manual check"
         assert output_data_manual.CheckId == "manual"
 
-    @freeze_time(datetime.now())
+    @freeze_time("2025-01-01 00:00:00")
+    @mock.patch(
+        "prowler.lib.outputs.compliance.prowler_threatscore.prowler_threatscore_azure.timestamp",
+        "2025-01-01 00:00:00",
+    )
     def test_batch_write_data_to_file(self):
         mock_file = StringIO()
         findings = [
             generate_finding_output(compliance={"ProwlerThreatScore-1.0": "1.1.1"})
         ]
-        output = ProwlerThreatScoreAzure(
-            findings, PROWLER_THREATSCORE_AZURE, PROWLER_THREATSCORE_AZURE_NAME
-        )
+        output = ProwlerThreatScoreAzure(findings, PROWLER_THREATSCORE_AZURE)
         output._file_descriptor = mock_file
 
         with patch.object(mock_file, "close", return_value=None):
