@@ -22,12 +22,13 @@ from api.db_utils import (
     StatusEnumField,
 )
 from api.models import (
-    ComplianceOverview,
+    ComplianceRequirementOverview,
     Finding,
     Integration,
     Invitation,
     Membership,
     PermissionChoices,
+    Processor,
     Provider,
     ProviderGroup,
     ProviderSecret,
@@ -637,12 +638,11 @@ class RoleFilter(FilterSet):
 
 class ComplianceOverviewFilter(FilterSet):
     inserted_at = DateFilter(field_name="inserted_at", lookup_expr="date")
-    provider_type = ChoiceFilter(choices=Provider.ProviderChoices.choices)
-    provider_type__in = ChoiceInFilter(choices=Provider.ProviderChoices.choices)
-    scan_id = UUIDFilter(field_name="scan__id")
+    scan_id = UUIDFilter(field_name="scan_id")
+    region = CharFilter(field_name="region")
 
     class Meta:
-        model = ComplianceOverview
+        model = ComplianceRequirementOverview
         fields = {
             "inserted_at": ["date", "gte", "lte"],
             "compliance_id": ["exact", "icontains"],
@@ -705,3 +705,12 @@ class IntegrationFilter(FilterSet):
         fields = {
             "inserted_at": ["date", "gte", "lte"],
         }
+
+
+class ProcessorFilter(FilterSet):
+    processor_type = ChoiceFilter(choices=Processor.ProcessorChoices.choices)
+    processor_type__in = ChoiceInFilter(
+        choices=Processor.ProcessorChoices.choices,
+        field_name="processor_type",
+        lookup_expr="in",
+    )

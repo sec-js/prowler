@@ -4,9 +4,8 @@ import { Snippet } from "@nextui-org/react";
 import Link from "next/link";
 
 import { CodeSnippet } from "@/components/ui/code-snippet/code-snippet";
-import { InfoField } from "@/components/ui/entities";
+import { EntityInfoShort, InfoField } from "@/components/ui/entities";
 import { DateWithTime } from "@/components/ui/entities/date-with-time";
-import { getProviderLogo } from "@/components/ui/entities/get-provider-logo";
 import { SeverityBadge } from "@/components/ui/table/severity-badge";
 import { FindingProps, ProviderType } from "@/types";
 
@@ -56,7 +55,7 @@ export const FindingDetail = ({
   const attributes = finding.attributes;
   const resource = finding.relationships.resource.attributes;
   const scan = finding.relationships.scan.attributes;
-  const provider = finding.relationships.provider.attributes;
+  const providerDetails = finding.relationships.provider.attributes;
 
   return (
     <div className="flex flex-col gap-6 rounded-lg">
@@ -68,7 +67,10 @@ export const FindingDetail = ({
           </h2>
         </div>
         <div className="flex items-center gap-x-4">
-          <Muted isMuted={attributes.muted} />
+          <Muted
+            isMuted={attributes.muted}
+            mutedReason={attributes.muted_reason || ""}
+          />
 
           <div
             className={`rounded-lg px-3 py-1 text-sm font-semibold ${
@@ -87,11 +89,12 @@ export const FindingDetail = ({
       {/* Check Metadata */}
       <Section title="Finding Details">
         <div className="flex flex-wrap gap-4">
-          <InfoField label="Provider" variant="simple">
-            {getProviderLogo(
-              attributes.check_metadata.provider as ProviderType,
-            )}
-          </InfoField>
+          <EntityInfoShort
+            cloudProvider={providerDetails.provider as ProviderType}
+            entityAlias={providerDetails.alias}
+            entityId={providerDetails.uid}
+            showConnectionStatus={providerDetails.connection.connected}
+          />
           <InfoField label="Service">
             {attributes.check_metadata.servicename}
           </InfoField>
@@ -259,7 +262,7 @@ export const FindingDetail = ({
       {/* Add new Scan Details section */}
       <Section title="Scan Details">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <InfoField label="Scan Name">{scan.name}</InfoField>
+          <InfoField label="Scan Name">{scan.name || "N/A"}</InfoField>
           <InfoField label="Resources Scanned">
             {scan.unique_resource_count}
           </InfoField>
@@ -292,31 +295,6 @@ export const FindingDetail = ({
               <DateWithTime inline dateTime={scan.scheduled_at} />
             </InfoField>
           )}
-        </div>
-      </Section>
-
-      {/* Provider Details section */}
-      <Section title="Provider Details">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <InfoField label="Provider" variant="simple">
-            {getProviderLogo(
-              attributes.check_metadata.provider as ProviderType,
-            )}
-          </InfoField>
-          <InfoField label="Account ID">{provider.uid}</InfoField>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {provider.alias && (
-            <InfoField label="Alias">{provider.alias}</InfoField>
-          )}
-          <InfoField label="Connection Status">
-            <span
-              className={`${provider.connection.connected ? "text-green-500" : "text-red-500"}`}
-            >
-              {provider.connection.connected ? "Connected" : "Disconnected"}
-            </span>
-          </InfoField>
         </div>
       </Section>
     </div>

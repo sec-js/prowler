@@ -43,9 +43,7 @@ from prowler.providers.m365.exceptions.exceptions import (
     M365NotTenantIdButClientIdAndClientSecretError,
     M365NotValidClientIdError,
     M365NotValidClientSecretError,
-    M365NotValidEncryptedPasswordError,
     M365NotValidTenantIdError,
-    M365NotValidUserError,
     M365SetUpRegionConfigError,
     M365SetUpSessionError,
     M365TenantIdAndClientIdNotBelongingToClientSecretError,
@@ -172,7 +170,7 @@ class M365Provider(Provider):
 
         # Get the dict from the static credentials
         m365_credentials = None
-        if tenant_id and client_id and client_secret and user and password:
+        if tenant_id and client_id and client_secret:
             m365_credentials = self.validate_static_credentials(
                 tenant_id=tenant_id,
                 client_id=client_id,
@@ -196,12 +194,15 @@ class M365Provider(Provider):
         self._identity = self.setup_identity(
             sp_env_auth,
             env_auth,
+            browser_auth,
+            az_cli_auth,
             self._session,
         )
 
         # Set up PowerShell session credentials
         self._credentials = self.setup_powershell(
             env_auth=env_auth,
+            sp_env_auth=sp_env_auth,
             m365_credentials=m365_credentials,
             identity=self.identity,
             init_modules=init_modules,
@@ -296,7 +297,7 @@ class M365Provider(Provider):
             client_id (str): The M365 Client ID.
             client_secret (str): The M365 Client Secret.
             user (str): The M365 User Account.
-            encrpted_password (str): The M365 Encrypted Password.
+            password (str): The M365 User Password.
 
         Raises:
             M365BrowserAuthNoTenantIDError: If browser authentication is enabled but the tenant ID is not found.
@@ -350,7 +351,6 @@ class M365Provider(Provider):
         """
         try:
             config = get_regions_config(region)
-
             return M365RegionConfig(
                 name=region,
                 authority=config["authority"],
@@ -377,6 +377,7 @@ class M365Provider(Provider):
     @staticmethod
     def setup_powershell(
         env_auth: bool = False,
+        sp_env_auth: bool = False,
         m365_credentials: dict = {},
         identity: M365IdentityInfo = None,
         init_modules: bool = False,
@@ -391,12 +392,13 @@ class M365Provider(Provider):
                 If env_auth is True, retrieves from environment variables.
                 If False, returns empty credentials.
         """
+        logger.info("M365 provider: Setting up PowerShell session...")
         credentials = None
 
         if m365_credentials:
             credentials = M365Credentials(
-                user=m365_credentials.get("user", ""),
-                passwd=m365_credentials.get("password", ""),
+                user=m365_credentials.get("user", None),
+                passwd=m365_credentials.get("password", None),
                 client_id=m365_credentials.get("client_id", ""),
                 client_secret=m365_credentials.get("client_secret", ""),
                 tenant_id=m365_credentials.get("tenant_id", ""),
@@ -417,6 +419,7 @@ class M365Provider(Provider):
                     file=os.path.basename(__file__),
                     message="Missing M365_USER or M365_PASSWORD environment variables required for credentials authentication.",
                 )
+
             credentials = M365Credentials(
                 client_id=client_id,
                 client_secret=client_secret,
@@ -426,14 +429,25 @@ class M365Provider(Provider):
                 passwd=m365_password,
             )
 
+        elif sp_env_auth:
+            client_id = getenv("AZURE_CLIENT_ID")
+            client_secret = getenv("AZURE_CLIENT_SECRET")
+            tenant_id = getenv("AZURE_TENANT_ID")
+            credentials = M365Credentials(
+                client_id=client_id,
+                client_secret=client_secret,
+                tenant_id=tenant_id,
+                tenant_domains=identity.tenant_domains,
+            )
+
         if credentials:
-            if identity:
+            if identity and credentials.user:
                 identity.user = credentials.user
             test_session = M365PowerShell(credentials, identity)
             try:
+                if init_modules:
+                    initialize_m365_powershell_modules()
                 if test_session.test_credentials(credentials):
-                    if init_modules:
-                        initialize_m365_powershell_modules()
                     return credentials
                 raise M365UserCredentialsError(
                     file=os.path.basename(__file__),
@@ -494,7 +508,7 @@ class M365Provider(Provider):
                 - client_id: The M365 client ID.
                 - client_secret: The M365 client secret
                 - user: The M365 user email
-                - password: The M365 encrypted password
+                - password: The M365 user password
                 - provider_id: The M365 provider ID (in this case the Tenant ID).
             region_config (M365RegionConfig): The region configuration object.
 
@@ -505,6 +519,7 @@ class M365Provider(Provider):
             Exception: If failed to retrieve M365 credentials.
 
         """
+        logger.info("M365 provider: Setting up session...")
         if not browser_auth:
             if sp_env_auth or env_auth:
                 try:
@@ -521,6 +536,8 @@ class M365Provider(Provider):
                             tenant_id=m365_credentials["tenant_id"],
                             client_id=m365_credentials["client_id"],
                             client_secret=m365_credentials["client_secret"],
+                            user=m365_credentials["user"],
+                            password=m365_credentials["password"],
                         )
                         return credentials
                     except ClientAuthenticationError as error:
@@ -686,8 +703,8 @@ class M365Provider(Provider):
                         tenant_id=tenant_id,
                         client_id=client_id,
                         client_secret=client_secret,
-                        user="user",
-                        password="password",
+                        user=None,
+                        password=None,
                     )
                 else:
                     m365_credentials = M365Provider.validate_static_credentials(
@@ -717,6 +734,8 @@ class M365Provider(Provider):
             identity = M365Provider.setup_identity(
                 sp_env_auth,
                 env_auth,
+                browser_auth,
+                az_cli_auth,
                 session,
             )
 
@@ -732,18 +751,15 @@ class M365Provider(Provider):
                     message=f"The provider ID {provider_id} does not match any of the service principal tenant domains: {', '.join(identity.tenant_domains)}",
                 )
 
-            # Set up PowerShell credentials
-            if user and password:
-                M365Provider.setup_powershell(
-                    env_auth,
-                    m365_credentials,
-                    identity,
-                )
-            else:
-                logger.info(
-                    "M365 provider: Connection to PowerShell has not been requested"
-                )
+            logger.info("M365 provider: Identity retrieved successfully")
 
+            # Set up PowerShell credentials
+            M365Provider.setup_powershell(
+                env_auth,
+                sp_env_auth,
+                m365_credentials,
+                identity,
+            )
             logger.info("M365 provider: Connection to PowerShell successful")
 
             return Connection(is_connected=True)
@@ -876,6 +892,8 @@ class M365Provider(Provider):
     def setup_identity(
         sp_env_auth,
         env_auth,
+        browser_auth,
+        az_cli_auth,
         session,
     ):
         """
@@ -891,7 +909,7 @@ class M365Provider(Provider):
         Returns:
             M365IdentityInfo: An instance of M365IdentityInfo containing the identity information.
         """
-        logger.info("M365 provider: Setting up identity ...")
+        logger.info("M365 provider: Setting up identity...")
         # TODO: fill this object with real values not default and set to none
         identity = M365IdentityInfo()
 
@@ -943,7 +961,7 @@ class M365Provider(Provider):
                 identity.identity_type = "Service Principal"
             elif env_auth:
                 identity.identity_type = "Service Principal and User Credentials"
-            else:
+            elif browser_auth or az_cli_auth:
                 identity.identity_type = "User"
                 try:
                     logger.info(
@@ -985,7 +1003,7 @@ class M365Provider(Provider):
             client_id (str): The M365 client ID.
             client_secret (str): The M365 client secret.
             user (str): The M365 user email.
-            password (str): The M365 encrypted password.
+            password (str): The M365 user password.
 
         Raises:
             M365NotValidTenantIdError: If the provided M365 Tenant ID is not valid.
@@ -1021,20 +1039,6 @@ class M365Provider(Provider):
             raise M365NotValidClientSecretError(
                 file=os.path.basename(__file__),
                 message="The provided Client Secret is not valid.",
-            )
-
-        # Validate the User
-        if not user:
-            raise M365NotValidUserError(
-                file=os.path.basename(__file__),
-                message="The provided User is not valid.",
-            )
-
-        # Validate the Encrypted Password
-        if not password:
-            raise M365NotValidEncryptedPasswordError(
-                file=os.path.basename(__file__),
-                message="The provided Encrypted Password is not valid.",
             )
 
         try:

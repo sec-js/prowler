@@ -179,7 +179,7 @@ CIS_1_8_KUBERNETES = Compliance(
                 CIS_Requirement_Attribute(
                     Section="1. Control Plane",
                     SubSection="1.1 Control Plane Node Configuration Files",
-                    Profile="Level 1 - Master Node",
+                    Profile="Level 1",
                     AssessmentStatus="Automated",
                     Description="Ensure that the controller manager pod specification file has permissions of `600` or more restrictive.",
                     RationaleStatement="The controller manager pod specification file controls various parameters that set the behavior of the Controller Manager on the master node. You should restrict its file permissions to maintain the integrity of the file. The file should be writable by only the administrators on the system.",
@@ -199,7 +199,7 @@ CIS_1_8_KUBERNETES = Compliance(
             Attributes=[
                 CIS_Requirement_Attribute(
                     Section="1.1 Control Plane Node Configuration Files",
-                    Profile="Level 1 - Master Node",
+                    Profile="Level 1",
                     AssessmentStatus="Automated",
                     Description="Ensure that the controller manager pod specification file has permissions of `600` or more restrictive.",
                     RationaleStatement="The controller manager pod specification file controls various parameters that set the behavior of the Controller Manager on the master node. You should restrict its file permissions to maintain the integrity of the file. The file should be writable by only the administrators on the system.",
@@ -279,7 +279,7 @@ CIS_4_0_M365 = Compliance(
             Attributes=[
                 CIS_Requirement_Attribute(
                     Section="1.1 Control Plane Node Configuration Files",
-                    Profile="Level 1 - Master Node",
+                    Profile="Level 1",
                     AssessmentStatus="Automated",
                     Description="Ensure that the controller manager pod specification file has permissions of `600` or more restrictive.",
                     RationaleStatement="The controller manager pod specification file controls various parameters that set the behavior of the Controller Manager on the master node. You should restrict its file permissions to maintain the integrity of the file. The file should be writable by only the administrators on the system.",
@@ -857,7 +857,6 @@ KISA_ISMSP_AWS = Compliance(
     ],
 )
 
-PROWLER_THREATSCORE_AWS_NAME = "prowler_threatscore_aws"
 PROWLER_THREATSCORE_AWS = Compliance(
     Framework="ProwlerThreatScore",
     Version="1.0",
@@ -901,7 +900,6 @@ PROWLER_THREATSCORE_AWS = Compliance(
     ],
 )
 
-PROWLER_THREATSCORE_AZURE_NAME = "prowler_threatscore_azure"
 PROWLER_THREATSCORE_AZURE = Compliance(
     Framework="ProwlerThreatScore",
     Version="1.0",
@@ -945,7 +943,6 @@ PROWLER_THREATSCORE_AZURE = Compliance(
     ],
 )
 
-PROWLER_THREATSCORE_GCP_NAME = "prowler_threatscore_gcp"
 PROWLER_THREATSCORE_GCP = Compliance(
     Framework="ProwlerThreatScore",
     Version="1.0",
@@ -989,7 +986,6 @@ PROWLER_THREATSCORE_GCP = Compliance(
     ],
 )
 
-PROWLER_THREATSCORE_M365_NAME = "prowler_threatscore_m365"
 PROWLER_THREATSCORE_M365 = Compliance(
     Framework="ProwlerThreatScore",
     Version="1.0",
